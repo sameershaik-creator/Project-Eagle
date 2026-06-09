@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Eagle - AI Privacy Shield</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+
+    <div class="alert-backdrop" id="alertModal">
+        <div class="alert-box">
+            <h2>⚠ POTENTIAL OBSERVER DETECTED</h2>
+            <p>Possible shoulder-surfing activity has been detected. Protect your screen canvas.</p>
+            <button id="dismissBtn" class="btn-dismiss">X Dismiss Shield</button>
+        </div>
+    </div>
+
+    <main class="app-container" id="appMainWrapper">
+
+        <header class="main-header">
+            <h1>PROJECT EAGLE</h1>
+            <span class="subtitle">Spatial AI Head-Orientation Privacy Sentry</span>
+            <p class="description">AI-powered privacy monitoring system that detects potential shoulder-surfing attempts using computer vision.</p>
+        </header>
+
+        <div class="workspace-layout">
+
+            <div class="video-card">
+                <div class="verification-overlay" id="verifyOverlay">
+                    <span id="verifyText">Click Start Protection to Begin</span>
+                </div>
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="outputCanvas"></canvas>
+            </div>
+
+            <div class="controls-card">
+                <div class="setting-group">
+                    <label for="thresholdSelect">Threat Activation Window</label>
+                    <select id="thresholdSelect" class="custom-select">
+                        <option value="1000">1 Second</option>
+                        <option value="2000">2 Seconds</option>
+                        <option value="3000">3 Seconds</option>
+                        <option value="4000">4 Seconds</option>
+                        <option value="5000" selected>5 Seconds (Recommended)</option>
+                        <option value="10000">10 Seconds</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label>Display Mode</label>
+                    <div class="toggle-container">
+                        <button id="stealthBtn" class="btn-toggle">Camera Feed Active</button>
+                    </div>
+                </div>
+
+                <button id="toggleBtn" class="btn-primary">Start Protection</button>
+
+                <div class="stats-panel">
+                    <div class="metric-row">
+                        <span>System Status:</span>
+                        <span id="systemStatus" class="status-offline">IDLE</span>
+                    </div>
+
+                    <div class="metric-row">
+                        <span>Observer Confidence:</span>
+                        <span id="observerConfidence">0%</span>
+                    </div>
+
+                    <div class="metric-row">
+                        <span>Threat Timer:</span>
+                        <span id="threatTimer" class="timer-display">0.0s</span>
+                    </div>
+
+                    <div class="metric-row">
+                        <span>Tracked People:</span>
+                        <span id="peopleCount">0</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
