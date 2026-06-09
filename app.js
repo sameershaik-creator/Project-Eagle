@@ -240,14 +240,14 @@ function calculateOrientationScore(landmarks) {
     if (heightSpan === 0) return 0;
     const pitchRatio = (noseY - eyeY) / heightSpan;
 
-    // Calculate horizontal score: deviation runs [0.0, 0.15] mapped to [1.0, 0.0]
+    // Calculate horizontal score: deviation runs [0.0, 0.25] mapped to [1.0, 0.0]
     const yawDeviation = Math.abs(yawRatio - 0.5);
-    const yawScore = Math.max(0, 1 - (yawDeviation / 0.15));
+    const yawScore = Math.max(0, 1 - (yawDeviation / 0.25));
 
-    // Calculate vertical score: deviation runs [0.0, 0.3] mapped to [1.0, 0.0]
+    // Calculate vertical score: deviation runs [0.0, 0.4] mapped to [1.0, 0.0]
     // Assume normal pitchRatio is around 0.45
     const pitchDeviation = Math.abs(pitchRatio - 0.45);
-    const pitchScore = Math.max(0, 1 - (pitchDeviation / 0.3));
+    const pitchScore = Math.max(0, 1 - (pitchDeviation / 0.4));
 
     return yawScore * pitchScore;
 }
@@ -264,23 +264,18 @@ function calculateStabilityScore(trackedFace) {
 
 function calculateVisibilityQualityScore(bounds) {
     if (!bounds) return 0;
-    // Edge distance: distance from face bounding box edges to screen edges [0, 1]
-    const edgeDistance = Math.min(bounds.xMin, 1 - bounds.xMax, bounds.yMin, 1 - bounds.yMax);
-
-    // Maximum quality at 8% border gap, decreases to 0 at the absolute border
-    const edgeScore = Math.max(0, Math.min(1, edgeDistance / 0.08));
-
     // Aspect ratio score: how close to typical face aspect ratio (around 0.75)
     const arDeviation = Math.abs(bounds.ratio - 0.75);
-    const arScore = Math.max(0, Math.min(1, 1 - arDeviation / 0.4));
+    const arScore = Math.max(0, Math.min(1, 1 - arDeviation / 0.45));
 
-    return edgeScore * arScore;
+    // Do not penalize being near the edges of the frame
+    return arScore;
 }
 
 function calculatePersistenceDurationScore(trackedFace) {
     const elapsed = Date.now() - trackedFace.firstSeen;
-    // Linearly scales to 1.0 over 3000ms
-    return Math.min(1.0, elapsed / 3000);
+    // Linearly scales to 1.0 over 1000ms (1 second) for responsive detection
+    return Math.min(1.0, elapsed / 1000);
 }
 
 function getClassificationLabel(confidence, classification) {
@@ -625,8 +620,31 @@ function processFrameResults(results) {
         }
     }
 
+    // For any tracked face that is not in the current frame, reset its threat duration to 0
+    for (let [id, tf] of trackedFaces.entries()) {
+        if (!currentFrameTracked.some(cft => cft.id === id)) {
+            tf.threatDuration = 0;
+        }
+    }
+
     let totalDetections = currentFrameTracked.length;
     peopleCountDisplay.textContent = totalDetections;
+
+    // Dynamically update primaryFaceId to the face with the highest primary user score
+    if (currentState === 'MONITORING' || currentState === 'THREAT_DETECTED' || currentState === 'BREACH') {
+        let bestFaceId = null;
+        let maxPrimaryScore = -1;
+        currentFrameTracked.forEach(tf => {
+            const score = getPrimaryScore(tf.bounds);
+            if (score > maxPrimaryScore) {
+                maxPrimaryScore = score;
+                bestFaceId = tf.id;
+            }
+        });
+        if (bestFaceId !== null) {
+            primaryFaceId = bestFaceId;
+        }
+    }
 
     // Calculate scores, classification, and confidence for secondary faces
     currentFrameTracked.forEach(tf => {
@@ -644,13 +662,23 @@ function processFrameResults(results) {
         const visibilityQualityScore = calculateVisibilityQualityScore(tf.bounds);
         const persistenceDurationScore = calculatePersistenceDurationScore(tf);
 
-        // Uncertainty "Unknown" check
-        if (stabilityScore < 0.4 || visibilityQualityScore < 0.5) {
+        // Uncertainty "Unknown" check - only filter if visibility quality (aspect ratio) is extremely bad
+        if (visibilityQualityScore < 0.25) {
             tf.classification = 'Unknown';
             tf.confidence = 0;
         } else if (orientationScore > 0.0) {
-            const rawConf = (orientationScore * 0.5 + stabilityScore * 0.25 + visibilityQualityScore * 0.25) * 100;
-            tf.confidence = Math.round(rawConf * persistenceDurationScore);
+            // Gaze orientation is the primary indicator of screen-watching (85% weight)
+            // stability and quality are minor secondary factors (5% and 10% weight)
+            const rawConf = (orientationScore * 0.85 + stabilityScore * 0.05 + visibilityQualityScore * 0.1) * 100;
+            let finalConf = Math.round(rawConf * persistenceDurationScore);
+
+            // Normalize confidence: Scale confidence upwards towards 100% based on threatDuration (staring duration)
+            if (tf.threatDuration > 0 && activeThreatThreshold > 0) {
+                const growthFactor = tf.threatDuration / activeThreatThreshold;
+                finalConf = Math.min(100, Math.round(finalConf + growthFactor * (100 - finalConf)));
+            }
+
+            tf.confidence = finalConf;
             tf.classification = getClassificationLabel(tf.confidence, 'Neutral');
         } else {
             tf.confidence = 0;
@@ -658,9 +686,11 @@ function processFrameResults(results) {
         }
 
         // Threat Assessment & Timer updates
+        // We require the face to have been tracked for at least 500ms (persistenceDurationScore >= 0.5) to filter out single-frame glitches.
+        // We do not require strict stability (tf.isStable) since looking at the screen can happen while moving.
         const isThreatObserver = 
-            tf.isStable && 
-            (tf.orientationScore > 0.0) && 
+            (persistenceDurationScore >= 0.5) &&
+            (tf.orientationScore > 0.1) && 
             (tf.confidence >= activeConfidenceThreshold) &&
             tf.classification !== 'Unknown';
 
@@ -670,10 +700,7 @@ function processFrameResults(results) {
                 tf.threatDuration = activeThreatThreshold;
             }
         } else {
-            // Reset duration if orientation score is 0, pause (do not increment) otherwise
-            if (tf.orientationScore === 0) {
-                tf.threatDuration = 0;
-            }
+            // Freeze the timer when looking away: do not increment, do not reset.
         }
     });
 
@@ -755,13 +782,15 @@ function processFrameResults(results) {
         }
     }
     else if (currentState === 'MONITORING' || currentState === 'THREAT_DETECTED' || currentState === 'BREACH') {
-        if (maxThreatDuration >= activeThreatThreshold) {
+        if (currentState === 'BREACH') {
+            // Manual dismissal only, do not transition automatically.
+        } else if (maxThreatDuration >= activeThreatThreshold) {
             if (currentState !== 'BREACH') {
                 currentState = 'BREACH'; 
                 updateUI();
             }
         } else if (activeObserverDetected) {
-            if (currentState !== 'THREAT_DETECTED' && currentState !== 'BREACH') {
+            if (currentState !== 'THREAT_DETECTED') {
                 currentState = 'THREAT_DETECTED'; 
                 updateUI();
             }
@@ -772,9 +801,13 @@ function processFrameResults(results) {
             }
         }
 
-        if (maxThreatDuration > 0) {
-            const countdownLeft = Math.max(0, ((activeThreatThreshold - maxThreatDuration) / 1000)).toFixed(1);
-            threatTimerDisplay.textContent = `${countdownLeft}s`;
+        if (currentState !== 'BREACH') {
+            if (maxThreatDuration > 0) {
+                const countdownLeft = Math.max(0, ((activeThreatThreshold - maxThreatDuration) / 1000)).toFixed(1);
+                threatTimerDisplay.textContent = `${countdownLeft}s`;
+            } else {
+                threatTimerDisplay.textContent = '0.0s';
+            }
         } else {
             threatTimerDisplay.textContent = '0.0s';
         }
